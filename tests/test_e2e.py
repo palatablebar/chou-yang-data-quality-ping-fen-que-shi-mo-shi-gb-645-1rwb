@@ -7,7 +7,8 @@ from pathlib import Path
 from fixtures import dirty_cases, expected
 
 SAMPLE_DIR = Path(__file__).resolve().parent.parent / "sample_data"
-PAGES = ("/", "/profile", "/missing", "/duplicates", "/outliers", "/batches")
+PAGES = ("/", "/profile", "/missing", "/review", "/duplicates", "/outliers",
+         "/batches")
 EXPORTS = ("report.csv", "profile.csv", "missing.csv", "duplicates.csv",
            "outliers.csv", "quarantine.csv", "flags.csv", "manifest.json")
 

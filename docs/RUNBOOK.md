@@ -36,8 +36,13 @@ curl -s -X POST http://127.0.0.1:18204/api/score \
 curl -s -X POST http://127.0.0.1:18204/api/datasets/upload \
   -F 'file=@sample_data/tickets_dirty.csv' -F 'encoding=utf-8'
 
+# 发布复核队列（同一附件重复发布会沿用原版本）
+curl -s -X POST http://127.0.0.1:18204/api/review/publish \
+  -H 'Content-Type: application/json' -d '{}'
+
 # 导出
 curl -s -o /tmp/report.csv http://127.0.0.1:18204/api/export/report.csv
+curl -s -o /tmp/review.csv http://127.0.0.1:18204/api/export/review.csv
 curl -s http://127.0.0.1:18204/api/export/manifest.json
 ```
 
@@ -67,6 +72,7 @@ curl -s http://127.0.0.1:18204/api/export/manifest.json
 | 404 | `E_SAMPLE_UNKNOWN` | 样例名不在白名单，用 `/api/datasets` 看可用项 |
 | 409 | `E_STALE_RUN` | 页面版本落后；刷新后重跑，别用旧页面覆盖 |
 | 404 | `E_RUN_NOT_FOUND` | 还没有运行记录，先跑一次评分 |
+| 404 | `E_QUEUE_NOT_FOUND` | 复核队列未发布，先在 `/review` 点「发布复核队列」 |
 
 ## 6 测试
 

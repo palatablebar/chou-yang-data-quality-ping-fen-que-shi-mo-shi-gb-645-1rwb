@@ -22,6 +22,7 @@ NAV = (
     ("/", "报告", "index"),
     ("/profile", "画像", "profile"),
     ("/missing", "缺失", "missing"),
+    ("/review", "复核", "review"),
     ("/duplicates", "重复", "duplicates"),
     ("/outliers", "离群", "outliers"),
     ("/batches", "批次", "batches"),

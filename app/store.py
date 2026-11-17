@@ -3,6 +3,8 @@
 约定：
 - 数据集按名字唯一：同名文件重新采信即覆盖原文，历史运行仍按 digest 保留；
 - 运行记录按 (dataset, digest, rules_version) 幂等：同输入重跑不新增行；
+- 复核队列按 (dataset, digest, rules_version) 幂等：同一附件重跑沿用原版本，
+  不新增重复整改项；发布单事务完成，失败整体回滚，上一完整旧版原样保留；
 - 分数与比率落 TEXT（Decimal 字符串），不落 float；
 - 页面永远只展示一条运行记录，导出读的是同一条快照。
 """
@@ -48,6 +50,40 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_identity ON runs(name, digest, rules_version);
 CREATE INDEX IF NOT EXISTS idx_runs_version ON runs(name, version DESC);
+CREATE TABLE IF NOT EXISTS review_queues (
+    queue_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    rules_version TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    item_count INTEGER NOT NULL,
+    cell_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    superseded_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_review_identity
+    ON review_queues(name, digest, rules_version);
+CREATE INDEX IF NOT EXISTS idx_review_status
+    ON review_queues(name, status, version DESC);
+CREATE TABLE IF NOT EXISTS review_items (
+    queue_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    item_id TEXT NOT NULL,
+    column_name TEXT NOT NULL,
+    label TEXT NOT NULL,
+    start_lineno INTEGER NOT NULL,
+    end_lineno INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    span INTEGER NOT NULL,
+    linenos_json TEXT NOT NULL,
+    bridges_json TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    code TEXT NOT NULL,
+    PRIMARY KEY (queue_id, seq)
+);
 """
 
 
@@ -176,3 +212,80 @@ class Store:
     def count_runs(self) -> int:
         with self.connect() as conn:
             return int(conn.execute("SELECT COUNT(*) AS n FROM runs").fetchone()["n"])
+
+    # ---------- 复核队列 ----------
+    def find_review_queue(self, name: str, digest: str,
+                          rules_version: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM review_queues WHERE name=? AND digest=?"
+                " AND rules_version=?",
+                (name, digest, rules_version)).fetchone()
+        return dict(row) if row else None
+
+    def current_review_queue(self, name: str) -> dict | None:
+        """数据集当前生效（published）的复核队列，最多一条。"""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM review_queues WHERE name=? AND status='published'"
+                " ORDER BY version DESC LIMIT 1", (name,)).fetchone()
+        return dict(row) if row else None
+
+    def list_review_queues(self, name: str, limit: int = 10) -> list[dict]:
+        """版本历史含已 superseded 的旧版：记录只增不删。"""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM review_queues WHERE name=?"
+                " ORDER BY version DESC LIMIT ?", (name, limit)).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_review_items(self, queue_id: str) -> list[dict]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM review_items WHERE queue_id=? ORDER BY seq",
+                (queue_id,)).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["column"] = item.pop("column_name")
+            item["linenos"] = json.loads(item.pop("linenos_json"))
+            item["bridges"] = json.loads(item.pop("bridges_json"))
+            items.append(item)
+        return items
+
+    def publish_review_queue(self, queue: dict, items: list[dict]) -> int:
+        """单事务发布：旧版置 superseded、新版与全部整改项一起落库。
+
+        任一步失败整体回滚，上一完整旧版保持 published 不动；版本号在事务
+        内取，并发发布被 SQLite 写锁串行化，不会撞号。
+        """
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS v FROM review_queues"
+                " WHERE name=?", (queue["name"],)).fetchone()
+            version = int(row["v"])
+            conn.execute(
+                "UPDATE review_queues SET status='superseded', superseded_at=?"
+                " WHERE name=? AND status='published'",
+                (queue["published_at"], queue["name"]))
+            conn.execute(
+                """INSERT INTO review_queues (queue_id,name,digest,rules_version,
+                        run_id,version,status,item_count,cell_count,created_at,
+                        published_at,superseded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+                (queue["queue_id"], queue["name"], queue["digest"],
+                 queue["rules_version"], queue["run_id"], version, "published",
+                 int(queue["item_count"]), int(queue["cell_count"]),
+                 queue["created_at"], queue["published_at"]))
+            conn.executemany(
+                """INSERT INTO review_items (queue_id,seq,item_id,column_name,label,
+                        start_lineno,end_lineno,length,span,linenos_json,
+                        bridges_json,basis,code)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                [(queue["queue_id"], int(item["seq"]), item["item_id"],
+                  item["column"], item["label"], int(item["start_lineno"]),
+                  int(item["end_lineno"]), int(item["length"]), int(item["span"]),
+                  json.dumps(item["linenos"], ensure_ascii=False),
+                  json.dumps(item["bridges"], ensure_ascii=False),
+                  item["basis"], item["code"]) for item in items])
+        return version

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% macro items_table(rows) %}
+<table class="ledger ledger--wide">
+  <thead>
+    <tr><th class="num">优先级</th><th>整改项</th><th>列</th><th class="num">起始行</th>
+        <th class="num">结束行</th><th class="num">缺失格</th><th>原始缺失格</th>
+        <th>连接依据</th><th>原因码</th></tr>
+  </thead>
+  <tbody>
+    {% for item in rows %}
+    <tr>
+      <td class="num">{{ item.seq }}</td>
+      <td class="mono">{{ item.item_id }}</td>
+      <td>{{ item.label }}</td>
+      <td class="num">{{ item.start_lineno }}</td>
+      <td class="num">{{ item.end_lineno }}</td>
+      <td class="num">{{ item.length }}</td>
+      <td class="mono">{{ item.linenos|join(" ") }}</td>
+      <td>
+        {{ item.basis }}
+        {% if item.bridges %}
+        <br><span class="mono">{% for bridge in item.bridges %}第{{ bridge.lineno }}行「{{ bridge.raw }}」{% if not loop.last %}；{% endif %}{% endfor %}</span>
+        {% endif %}
+      </td>
+      <td class="mono">{{ item.code }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+{% block body %}
+<h1 class="title">高缺失复核队列</h1>
+{% if run %}
+<p class="statline">
+  <span>数据集 <b>{{ run.name }}</b></span>
+  <span>运行版本 <b class="num">v{{ run.version }}</b></span>
+  {% if queue %}
+  <span>队列版本 <b class="num">v{{ queue.version }}</b></span>
+  <span>整改项 <b class="num">{{ queue.item_count }}</b></span>
+  <span>覆盖缺失格 <b class="num">{{ queue.cell_count }}</b></span>
+  <span>发布于 <b>{{ queue.published_at|localdt }}</b></span>
+  {% else %}
+  <span>队列 <b>未发布</b></span>
+  {% endif %}
+</p>
+
+{% if queue %}
+<section class="block">
+  <h2 class="block__title">整改项<span class="block__hint">{{ queue.queue_id }} · v{{ queue.version }} · 按缺失格数降序，每条缺失格只进一个整改项</span></h2>
+  {% if items %}
+  {{ items_table(items) }}
+  {% else %}
+  <p class="empty">队列已发布：本数据集没有达到立段阈值的连续缺失，没有整改项。</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if preview %}
+<section class="block">
+  <h2 class="block__title">待发布预览<span class="block__hint">来自运行 {{ run.run_id }} · 裁定 {{ preview.item_count }} 段 / {{ preview.cell_count }} 格，发布后成为当前生效队列</span></h2>
+  {% if preview.entries %}
+  {{ items_table(preview.entries) }}
+  {% else %}
+  <p class="empty">当前运行没有裁定出连续缺失段，发布后将得到空队列。</p>
+  {% endif %}
+  <form id="publish-form" class="form" data-run-id="{{ run.run_id }}">
+    <div class="actions">
+      <button class="btn btn--primary" type="submit" id="publish-btn">发布复核队列</button>
+    </div>
+  </form>
+  <p class="status" id="form-status" role="status" aria-live="polite"></p>
+</section>
+{% endif %}
+
+{% if history %}
+<section class="block">
+  <h2 class="block__title">队列版本<span class="block__hint">记录只增不删，被取代的旧版完整保留</span></h2>
+  <table class="ledger">
+    <thead>
+      <tr><th>队列</th><th class="num">版本</th><th>状态</th><th class="num">整改项</th>
+          <th class="num">覆盖缺失格</th><th>发布时间</th></tr>
+    </thead>
+    <tbody>
+      {% for entry in history %}
+      <tr>
+        <td class="mono">{{ entry.queue_id }}</td>
+        <td class="num">v{{ entry.version }}</td>
+        <td>{% if entry.status == "published" %}<span class="sev sev--pass">生效中</span>{% else %}<span class="tag">已取代</span>{% endif %}</td>
+        <td class="num">{{ entry.item_count }}</td>
+        <td class="num">{{ entry.cell_count }}</td>
+        <td class="mono">{{ entry.published_at|localdt }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="block">
+  <h2 class="block__title">导出</h2>
+  <p class="links">
+    <a class="link" href="/api/export/review.csv">导出复核队列 CSV</a>
+    <a class="link" href="/api/export/missing.csv">导出缺失</a>
+  </p>
+</section>
+{% else %}
+<p class="empty">还没有运行记录。</p>
+{% endif %}
+{% endblock %}

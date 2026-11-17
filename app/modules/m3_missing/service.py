@@ -1,17 +1,20 @@
-"""M3 编排：单元格账 + 连续缺失段 + 缺失模式矩阵。"""
+"""M3 编排：单元格账 + 连续缺失段 + 裁定段 + 缺失模式矩阵。"""
 from __future__ import annotations
 
-from . import cells, matrix, runs
+from . import cells, matrix, runs, segments
 
 
 def build(profile: dict) -> dict:
     account = cells.account(profile)
     found = runs.find_runs(profile)
+    adjudicated = segments.find_segments(profile)
     return {
         "account": account,
         "runs": found,
         "run_summary": runs.summary(found),
         "longest_run": runs.longest(found),
+        "segments": adjudicated,
+        "segment_summary": segments.summary(adjudicated),
         "patterns": matrix.pattern_table(profile),
         "co_missing": matrix.co_missing(profile),
     }

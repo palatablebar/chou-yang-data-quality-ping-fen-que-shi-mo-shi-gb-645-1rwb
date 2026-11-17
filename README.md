@@ -15,10 +15,11 @@
 | 采信 | 编码回退链、BOM 剥离、重复表头分段、列数校验、末行截断判定、空态三分 |
 | 画像 | 逐格三态（缺失 / 格式不合格 / 有值）、填充率、基数、格式率、取值范围、高频取值 |
 | 缺失模式 | 单元格账、连续缺失段（同列连续 ≥3 格）、缺失签名分组、共缺对 |
+| 复核队列 | 段边界裁定（≤1 格短暂有值跨接成段）、一段一个整改项、缺失格互斥、发布可回滚 |
 | 重复判定 | 全行哈希账与业务键账分开；同键不同值的两行都保留原值并列出冲突列 |
 | 稳健离群 | 中位数 + MAD 稳健 z，MAD=0 回退 IQR/1.349，离散度低于刻度下限判退化 |
 | 评分 | 100 − 缺失 30 − 重复 25 − 离群 20 − 格式 25，每维按容忍度封顶，Decimal 计分 |
-| 批次与导出 | run_id、输入 sha256、版本自增、同输入幂等复用、陈旧提交 409、六种 CSV + 清单 JSON |
+| 批次与导出 | run_id、输入 sha256、版本自增、同输入幂等复用、陈旧提交 409、七种 CSV + 清单 JSON |
 
 ## 功能模块
 
@@ -26,7 +27,8 @@
 |---|---|---|---|
 | M1 数据采信 | `POST /api/datasets/import`、`POST /api/datasets/upload` | `app/modules/m1_ingest/decode.py`、`reader.py`、`sniff.py`、`service.py` | `tests/test_m1_ingest.py` |
 | M2 字段画像 | `GET /api/profile`、`POST /api/profile/cell`、页面 `/profile` | `app/modules/m2_profile/formats.py`、`column_stats.py`、`profile.py` | `tests/test_m2_profile.py` |
-| M3 缺失模式 | `GET /api/missing`、页面 `/missing` | `app/modules/m3_missing/cells.py`、`runs.py`、`matrix.py` | `tests/test_m3_missing.py` |
+| M3 缺失模式 | `GET /api/missing`、页面 `/missing` | `app/modules/m3_missing/cells.py`、`runs.py`、`segments.py`、`matrix.py` | `tests/test_m3_missing.py` |
+| M8 复核队列 | `GET /api/review`、`POST /api/review/publish`、页面 `/review` | `app/modules/m8_review/queue.py`、`service.py`、`csv_out.py` | `tests/test_m8_review.py` |
 | M4 重复判定 | `GET /api/duplicates`、页面 `/duplicates` | `app/modules/m4_duplicates/hashdup.py`、`keydup.py`、`groups.py` | `tests/test_m4_duplicates.py` |
 | M5 稳健离群 | `GET /api/outliers`、页面 `/outliers` | `app/modules/m5_outliers/robust.py`、`zscore.py`、`flags.py` | `tests/test_m5_outliers.py` |
 | M6 评分与批次 | `POST /api/score`、`GET /api/batches`、`GET /api/reconcile`、页面 `/batches` | `app/modules/m6_score/score.py`、`grade.py`、`runstore.py`、`service.py` | `tests/test_m6_score.py` |
@@ -45,6 +47,10 @@
    总分 = 100 − 扣分之和，恒在 [0, 100]，`总分 + 扣分之和 = 100` 逐位成立。
 5. **幂等与版本**：同名数据集按内容 sha256 + 规则版本 + 阈值摘要识别，
    同输入重跑返回同一运行记录；客户端版本落后于库里版本时返回 409。
+6. **复核队列裁定**：同列相邻缺失底段间隔 ≤1 格有值时跨接为一段，段内
+   原始缺失格 ≥3 立为整改项；每条缺失格至多进入一个整改项。同一附件
+   重跑发布沿用原队列版本，不新增重复整改项；发布单事务完成，失败时
+   上一完整旧版保持生效，页面与导出读同一份库内队列。
 
 ## 启动
 
@@ -60,10 +66,11 @@ open http://127.0.0.1:18204/
 
 1. 打开 `/`，样例选 `tickets_dirty.csv`，点「采信并评分」→ 报告页显示 65.24 分 C 级。
 2. `/profile` 看待映射列与格式不合格；`/missing` 看连续缺失段与共缺对。
-3. `/duplicates` 看全行重复组与 `T-2026-000204` 的冲突列。
-4. `/outliers` 看 `first_response_min` 的极端值与 `satisfaction` 的退化标记。
-5. `/batches` 看版本、阈值与五项对账；再点「重跑」验证幂等复用。
-6. 任一页面底部导出 CSV，或直接 `curl /api/export/manifest.json` 取运行清单。
+3. `/review` 看裁定后的复核队列：每段起止、原始缺失格与连接依据，点「发布复核队列」生效；再发布同一附件验证幂等复用。
+4. `/duplicates` 看全行重复组与 `T-2026-000204` 的冲突列。
+5. `/outliers` 看 `first_response_min` 的极端值与 `satisfaction` 的退化标记。
+6. `/batches` 看版本、阈值与五项对账；再点「重跑」验证幂等复用。
+7. 任一页面底部导出 CSV，或直接 `curl /api/export/manifest.json` 取运行清单。
 
 ## API 与页面
 
@@ -77,25 +84,27 @@ open http://127.0.0.1:18204/
 | GET | `/api/profile` | 字段画像 |
 | POST | `/api/profile/cell` | 单格试解析 |
 | GET | `/api/missing` | 缺失账、连续段、共缺对 |
+| GET | `/api/review` | 当前生效复核队列 + 待发布预览 |
+| POST | `/api/review/publish` | 发布当前运行的复核队列（同附件幂等复用） |
 | GET | `/api/duplicates` | 两套重复账与冲突 |
 | GET | `/api/outliers` | 逐列稳健统计与离群格 |
 | POST | `/api/score` | 跑一次评分（可带 `expected_version`） |
 | GET | `/api/batches` | 运行历史 |
 | GET | `/api/reconcile` | 五项对账 |
-| GET | `/api/export/report.csv` 等 | 六种 CSV + `manifest.json` |
-| GET | `/`、`/profile`、`/missing`、`/duplicates`、`/outliers`、`/batches` | 六个页面 |
+| GET | `/api/export/report.csv` 等 | 七种 CSV + `manifest.json`（含复核队列 `review.csv`） |
+| GET | `/`、`/profile`、`/missing`、`/review`、`/duplicates`、`/outliers`、`/batches` | 七个页面 |
 
 ## 目录
 
 ```text
 app/
   main.py config.py errors.py reasons.py manifest.py store.py web.py
-  modules/m1_ingest … m7_export/   每个模块 handler + service + 3 个规则/读写文件
-  templates/  base.html + 6 页
+  modules/m1_ingest … m8_review/   每个模块 handler + service + 3 个规则/读写文件
+  templates/  base.html + 7 页
   static/     theme.css layout.css components.css app.js table.js charts.js
 docs/         DEPTH.md DATA-DICTIONARY.md RUNBOOK.md
 sample_data/  9 个 CSV（脏、干净、GB18030、BOM、截断、常量列、仅表头、空行、空文件）
-tests/        conftest.py + 7 个模块测试 + e2e + invariants + fixtures
+tests/        conftest.py + 8 个模块测试 + e2e + invariants + fixtures
 ```
 
 ## 定义与已覆盖

@@ -1,6 +1,6 @@
 # 深度登记 qualiscore（抽样数据质量评分与缺失模式）
 
-- 规模：中型（7 个功能模块 / 6 个应用页 / 97 条测试）
+- 规模：中型（8 个功能模块 / 7 个应用页 / 114 条测试）
 - 核心规则：**MAD 稳健 z + 退化回退 + 封顶加权评分**。逐格先判三态（缺失 / 格式不合格 / 有值），
   再按列算中位数与 MAD；`z = 0.6745 × (x − 中位数) / MAD`，MAD=0 时回退 `spread = 0.6745 × IQR / 1.349`，
   离散度低于「列刻度 × 5」或 MAD 与 IQR 同为 0 判退化；评分 = 100 − 缺失 30 − 重复 25 − 离群 20 − 格式 25，
@@ -14,13 +14,14 @@
 |---|---|---|---|---|
 | M1 数据采信 | 选样例或上传 CSV，看逐行诊断与隔离行 | POST /api/datasets/import、POST /api/datasets/upload、GET /api/datasets/{name}/rows | `app/modules/m1_ingest/decode.py` `app/modules/m1_ingest/reader.py` `app/modules/m1_ingest/sniff.py` `app/modules/m1_ingest/service.py` | `tests/test_m1_ingest.py` |
 | M2 字段画像 | 看每列填充率、基数、格式率、取值范围 | GET /api/profile、POST /api/profile/cell、页面 /profile | `app/modules/m2_profile/formats.py` `app/modules/m2_profile/column_stats.py` `app/modules/m2_profile/profile.py` `app/modules/m2_profile/service.py` | `tests/test_m2_profile.py` |
-| M3 缺失模式 | 看单元格账、连续缺失段、共缺对 | GET /api/missing、页面 /missing | `app/modules/m3_missing/cells.py` `app/modules/m3_missing/runs.py` `app/modules/m3_missing/matrix.py` `app/modules/m3_missing/service.py` | `tests/test_m3_missing.py` |
+| M3 缺失模式 | 看单元格账、连续缺失段、共缺对 | GET /api/missing、页面 /missing | `app/modules/m3_missing/cells.py` `app/modules/m3_missing/runs.py` `app/modules/m3_missing/segments.py` `app/modules/m3_missing/matrix.py` `app/modules/m3_missing/service.py` | `tests/test_m3_missing.py` |
+| M8 复核队列 | 看裁定后的整改项队列、发布与回滚 | GET /api/review、POST /api/review/publish、GET /api/export/review.csv、页面 /review | `app/modules/m8_review/queue.py` `app/modules/m8_review/service.py` `app/modules/m8_review/csv_out.py` `app/modules/m8_review/handler.py` | `tests/test_m8_review.py` |
 | M4 重复判定 | 看全行重复组与同键冲突的原值对照 | GET /api/duplicates、页面 /duplicates | `app/modules/m4_duplicates/hashdup.py` `app/modules/m4_duplicates/keydup.py` `app/modules/m4_duplicates/groups.py` `app/modules/m4_duplicates/service.py` | `tests/test_m4_duplicates.py` |
 | M5 稳健离群 | 看逐列中位数、MAD、回退方法与离群格 | GET /api/outliers、页面 /outliers | `app/modules/m5_outliers/robust.py` `app/modules/m5_outliers/zscore.py` `app/modules/m5_outliers/flags.py` `app/modules/m5_outliers/service.py` | `tests/test_m5_outliers.py` |
 | M6 评分与批次 | 跑一次评分、查运行历史、看五项对账、重跑 | POST /api/score、GET /api/batches、GET /api/reconcile、页面 /batches | `app/modules/m6_score/score.py` `app/modules/m6_score/grade.py` `app/modules/m6_score/runstore.py` `app/modules/m6_score/service.py` | `tests/test_m6_score.py` |
 | M7 报告导出 | 看报告页、导出六种 CSV 与运行清单 | GET /、GET /api/export/* | `app/modules/m7_export/report.py` `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` `app/modules/m7_export/service.py` | `tests/test_m7_export.py` |
 
-端到端：`tests/test_e2e.py`（HTTP 走完采信 → 评分 → 六页 200 → 八种导出；含上传、失败输入、陈旧版本 409）。
+端到端：`tests/test_e2e.py`（HTTP 走完采信 → 评分 → 七页 200 → 八种导出；含上传、失败输入、陈旧版本 409）。
 不变量：`tests/test_invariants.py`（行分区、单元格分区、分数闭合、幂等重跑、重复分区、顺序无关、缺失扣分单调）。
 
 ## 陷阱登记
@@ -38,6 +39,8 @@
 | TRAP-19 | 一个单元格同时像缺失、越界、离群 | 按代码顺序覆盖，分项之和大于总分 | 固定优先级缺失 > 格式不合格 > 离群，一格只进一个桶 | `app/modules/m5_outliers/flags.py`、`app/modules/m2_profile/formats.py` | `tests/test_m5_outliers.py::test_priority_missing_over_range_over_outlier` |
 | TRAP-22 | 同一组重复行打乱顺序 | 代表行随顺序变化，导出结果不可复现 | 代表行取最小原始行号，组排序按代表行号 | `app/modules/m4_duplicates/groups.py`、`app/modules/m4_duplicates/hashdup.py` | `tests/test_m4_duplicates.py::test_order_independence_of_groups` |
 | TRAP-26 | 旧页面提交覆盖新结果 | 后提交无条件写入，新版本被旧数据顶掉 | 同名数据集版本自增，`expected_version` 落后即 409 | `app/modules/m6_score/runstore.py` | `tests/test_m6_score.py::test_stale_submission_rejected`、`tests/test_e2e.py::test_stale_version_conflict_over_http` |
+| TRAP-31 | 长缺口中间补回一格有值；或跨接任意有值格 | 短暂有值算断段则长缺口被拆没（两段都 <3 立不了段）；无脑跨接则无关工单串成一段 | 裁定规则：底段间隔 ≤1 格有值才跨接并留「连接依据」，段内原始缺失 ≥3 才立段，段间互斥装配时逐格校验 | `app/modules/m3_missing/segments.py`、`app/modules/m8_review/queue.py` | `tests/test_m8_review.py::test_single_filled_cell_is_bridged`、`tests/test_m8_review.py::test_gap_wider_than_limit_breaks_segment` |
+| TRAP-32 | 发布中途失败 / 同一附件重复发布 | 半截队列顶掉旧版，或同一附件落出重复整改项 | 发布单事务：失败整体回滚，上一完整旧版保持生效；队列按（数据集， 摘要， 规则版本）幂等，重跑沿用原版本 | `app/store.py`、`app/modules/m8_review/service.py` | `tests/test_m8_review.py::test_failed_publish_rolls_back_to_previous_version`、`tests/test_m8_review.py::test_publish_then_republish_same_attachment_reuses` |
 
 ## 对账规则
 

@@ -18,6 +18,8 @@ def api_missing(run_id: str | None = None, ctx: Ctx = Depends(get_ctx)) -> dict:
     return {"run_id": run["run_id"], "dataset": run["name"],
             "account": missing["account"], "runs": missing["runs"],
             "run_summary": missing["run_summary"],
+            "segments": missing["segments"],
+            "segment_summary": missing["segment_summary"],
             "patterns": missing["patterns"], "co_missing": missing["co_missing"]}
 
 

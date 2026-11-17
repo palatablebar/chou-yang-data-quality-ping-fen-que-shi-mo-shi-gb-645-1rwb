@@ -61,6 +61,23 @@
     }
   }
 
+  async function publishQueue(form) {
+    if (state.busy) return;
+    state.busy = true;
+    status("发布中…");
+    try {
+      await postJSON("/api/review/publish", {
+        run_id: form.getAttribute("data-run-id") || null
+      });
+      status("已发布，正在刷新…", "good");
+      window.location.assign("/review");
+    } catch (error) {
+      status(error.message, "bad");
+    } finally {
+      state.busy = false;
+    }
+  }
+
   function bind() {
     const form = byId("ingest-form");
     if (form) {
@@ -82,6 +99,13 @@
           encoding: String((byId("encoding-input") || {}).value || ""),
           expected_version: form.getAttribute("data-version") || null
         });
+      });
+    }
+    const publish = byId("publish-form");
+    if (publish) {
+      publish.addEventListener("submit", function (event) {
+        event.preventDefault();
+        publishQueue(publish);
       });
     }
   }

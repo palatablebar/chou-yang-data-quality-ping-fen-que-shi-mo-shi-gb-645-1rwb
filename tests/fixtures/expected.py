@@ -38,6 +38,11 @@ MISSING_RUNS = {
     "region": (14, 17, 4),
 }
 
+MISSING_SEGMENTS = {
+    "agent": (8, 11, 4),
+    "region": (14, 17, 4),
+}
+
 MISSING_PATTERNS = {
     ("agent",): 3,
     ("first_response_min",): 3,
